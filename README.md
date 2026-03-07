@@ -2,7 +2,7 @@
 
 A lightweight macOS menu bar app for changing your default browser in one click.
 
-Instead of opening System Settings every time you want to switch browsers, Quick Switch puts a dropdown in your menu bar with all your installed browsers listed. Click one to make it your new default — no confirmation dialogs, no extra steps.
+Instead of opening System Settings or going through the browser menu every time you want to change your default browser, Quick Switch puts a dropdown in your menu bar with all your installed browsers listed. Click one to make it your new default — no confirmation dialogs, no extra steps.
 
 ## Features
 
