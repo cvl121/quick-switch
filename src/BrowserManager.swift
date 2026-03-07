@@ -31,6 +31,7 @@ final class BrowserManager {
 
             let key = bundleID.lowercased()
             guard !seen.contains(key) else { continue }
+            guard key != "org.chromium.chromium" else { continue }
             seen.insert(key)
 
             let name = (bundle.infoDictionary?["CFBundleDisplayName"] as? String)
