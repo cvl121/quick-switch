@@ -22,7 +22,7 @@ Instead of opening System Settings every time you want to switch browsers, Quick
 
 ## Install
 
-1. Download `QuickSwitch-0.5.0.dmg` from the [Releases](https://github.com/cvl121/quick-switch/releases) page
+1. Download `QuickSwitch-1.0.0.dmg` from the [Releases](https://github.com/cvl121/quick-switch/releases) page
 2. Open the DMG
 3. Drag **Quick Switch** into the **Applications** folder
 4. Launch from Applications
@@ -39,4 +39,4 @@ The menu also includes:
 
 ## Version
 
-0.5.0
+1.0.0
