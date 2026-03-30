@@ -1,3 +1,5 @@
+![](https://github.com/cvl121/quick-switch/blob/main/Screenshot%202026-03-30%20at%2015.19.36.png)
+
 # Quick Switch
 
 A lightweight macOS menu bar app for changing your default browser in one click.
