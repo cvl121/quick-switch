@@ -9,6 +9,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var browsers: [Browser] = []
     private var currentDefaultBundleID: String?
     private var directoryMonitorSource: DispatchSourceFileSystemObject?
+    private var debounceWorkItem: DispatchWorkItem?
     private var launchAtLoginItem: NSMenuItem?
 
     override init() {
@@ -199,10 +200,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         )
 
         source.setEventHandler { [weak self] in
-            // Debounce: wait briefly for bulk installs to settle
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            // Debounce: cancel any pending refresh and schedule a new one
+            // so bulk installs coalesce into a single refresh.
+            self?.debounceWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
                 self?.refreshBrowsers()
             }
+            self?.debounceWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
         }
 
         source.setCancelHandler {

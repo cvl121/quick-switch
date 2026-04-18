@@ -18,6 +18,12 @@ struct Browser: Hashable {
 
 final class BrowserManager {
 
+    // Non-browser apps that register as HTTPS handlers
+    private static let excludedBundleIDs: Set<String> = [
+        "org.chromium.chromium",
+        "com.parallels.desktop.console",
+    ]
+
     func detectBrowsers() -> [Browser] {
         guard let httpsURL = URL(string: "https://example.com") else { return [] }
         let appURLs = NSWorkspace.shared.urlsForApplications(toOpen: httpsURL)
@@ -31,7 +37,7 @@ final class BrowserManager {
 
             let key = bundleID.lowercased()
             guard !seen.contains(key) else { continue }
-            guard key != "org.chromium.chromium" else { continue }
+            guard !Self.excludedBundleIDs.contains(key) else { continue }
             seen.insert(key)
 
             let name = (bundle.infoDictionary?["CFBundleDisplayName"] as? String)
@@ -50,6 +56,25 @@ final class BrowserManager {
     }
 
     func getDefaultBrowserBundleID() -> String? {
+        // Read directly from the LaunchServices plist rather than querying
+        // NSWorkspace, which depends on lsd's in-memory state and may return
+        // stale data while lsd is restarting after a default-browser change.
+        let prefsFile = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+
+        if let data = try? Data(contentsOf: prefsFile),
+           let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let handlers = root["LSHandlers"] as? [[String: Any]] {
+            for handler in handlers {
+                if let scheme = handler["LSHandlerURLScheme"] as? String,
+                   scheme.lowercased() == "https",
+                   let bundleID = handler["LSHandlerRoleAll"] as? String {
+                    return bundleID
+                }
+            }
+        }
+
+        // Fall back to NSWorkspace if the plist can't be read
         guard let url = URL(string: "https:") else { return nil }
         guard let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) else { return nil }
         return Bundle(url: appURL)?.bundleIdentifier
@@ -140,12 +165,14 @@ final class BrowserManager {
     }
 
     private func reloadLaunchServices() {
-        // Restart the LaunchServices daemon so it re-reads the plist.
-        // `killall lsd` is much faster than `lsregister -kill -r` and
-        // immediately makes NSWorkspace reflect the new default.
+        // Use launchctl kickstart to restart the user's LaunchServices daemon.
+        // This is faster than `killall lsd` because launchctl performs the
+        // kill and restart atomically, eliminating the gap where no lsd
+        // process exists and NSWorkspace queries return stale data.
+        let uid = getuid()
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        process.arguments = ["lsd"]
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["kickstart", "-kp", "gui/\(uid)/com.apple.lsd"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
