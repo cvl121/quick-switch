@@ -24,6 +24,22 @@ final class BrowserManager {
         "com.parallels.desktop.console",
     ]
 
+    private let prefsFileURL: URL
+    private let reloadDaemon: () -> Void
+
+    /// - Parameters:
+    ///   - prefsFileURL: Path to the LaunchServices plist. Override in tests.
+    ///   - reloadDaemon: Action that restarts `lsd`. Override in tests with a no-op
+    ///     to avoid affecting the user's actual system.
+    init(
+        prefsFileURL: URL? = nil,
+        reloadDaemon: @escaping () -> Void = BrowserManager.kickstartLaunchServices
+    ) {
+        self.prefsFileURL = prefsFileURL ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+        self.reloadDaemon = reloadDaemon
+    }
+
     func detectBrowsers() -> [Browser] {
         guard let httpsURL = URL(string: "https://example.com") else { return [] }
         let appURLs = NSWorkspace.shared.urlsForApplications(toOpen: httpsURL)
@@ -59,10 +75,7 @@ final class BrowserManager {
         // Read directly from the LaunchServices plist rather than querying
         // NSWorkspace, which depends on lsd's in-memory state and may return
         // stale data while lsd is restarting after a default-browser change.
-        let prefsFile = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
-
-        if let data = try? Data(contentsOf: prefsFile),
+        if let data = try? Data(contentsOf: prefsFileURL),
            let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
            let handlers = root["LSHandlers"] as? [[String: Any]] {
             for handler in handlers {
@@ -80,20 +93,14 @@ final class BrowserManager {
         return Bundle(url: appURL)?.bundleIdentifier
     }
 
-    /// Changes the default browser by writing directly to the LaunchServices
-    /// preferences plist and reloading the daemon. This bypasses
-    /// `LSSetDefaultHandlerForURLScheme` which triggers a system confirmation
-    /// dialog on modern macOS.
-    func setDefaultBrowser(_ bundleIdentifier: String) -> Bool {
-        let prefsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/com.apple.LaunchServices")
-        let prefsFile = prefsDir.appendingPathComponent("com.apple.launchservices.secure.plist")
-
-        // Read existing plist (or start fresh)
+    /// Writes the default-browser preference to the LaunchServices plist.
+    /// Synchronous and fast; does NOT reload the daemon. Returns true on success.
+    @discardableResult
+    func writeDefaultBrowserPreference(_ bundleIdentifier: String) -> Bool {
         var plist: [String: Any]
         var handlers: [[String: Any]]
 
-        if let data = try? Data(contentsOf: prefsFile),
+        if let data = try? Data(contentsOf: prefsFileURL),
            let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
             plist = root
             handlers = (root["LSHandlers"] as? [[String: Any]]) ?? []
@@ -104,11 +111,9 @@ final class BrowserManager {
 
         let now = Int(Date().timeIntervalSinceReferenceDate)
 
-        // Schemes and content types we need to update
         let urlSchemes = ["http", "https"]
         let contentTypes = ["public.html", "com.apple.default-app.web-browser"]
 
-        // Update existing URL scheme entries
         var updatedSchemes = Set<String>()
         var updatedTypes = Set<String>()
 
@@ -127,7 +132,6 @@ final class BrowserManager {
             }
         }
 
-        // Add missing entries
         for scheme in urlSchemes where !updatedSchemes.contains(scheme) {
             handlers.append([
                 "LSHandlerURLScheme": scheme,
@@ -147,28 +151,47 @@ final class BrowserManager {
 
         plist["LSHandlers"] = handlers
 
-        // Write back as binary plist
         guard let newData = try? PropertyListSerialization.data(
             fromPropertyList: plist, format: .binary, options: 0
         ) else { return false }
 
         do {
-            try FileManager.default.createDirectory(at: prefsDir, withIntermediateDirectories: true)
-            try newData.write(to: prefsFile, options: .atomic)
+            try FileManager.default.createDirectory(
+                at: prefsFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try newData.write(to: prefsFileURL, options: .atomic)
         } catch {
             return false
         }
 
-        // Reload LaunchServices so the change takes effect immediately
-        reloadLaunchServices()
         return true
     }
 
-    private func reloadLaunchServices() {
-        // Use launchctl kickstart to restart the user's LaunchServices daemon.
-        // This is faster than `killall lsd` because launchctl performs the
-        // kill and restart atomically, eliminating the gap where no lsd
-        // process exists and NSWorkspace queries return stale data.
+    /// Changes the default browser by writing the LaunchServices plist and
+    /// asynchronously reloading the daemon. Returns true if the plist write
+    /// succeeded; the daemon reload is fire-and-forget so the caller does not
+    /// block on it (the kickstart takes ~100–300 ms).
+    @discardableResult
+    func setDefaultBrowser(_ bundleIdentifier: String) -> Bool {
+        let success = writeDefaultBrowserPreference(bundleIdentifier)
+        guard success else { return false }
+
+        // The plist is the source of truth; once it's written, our own
+        // getDefaultBrowserBundleID returns the new value immediately.
+        // The daemon kickstart only matters for the rest of the system to
+        // pick up the change, so it doesn't need to block the caller.
+        DispatchQueue.global(qos: .userInitiated).async { [reloadDaemon] in
+            reloadDaemon()
+        }
+        return true
+    }
+
+    /// Restarts the user's `lsd` so the LaunchServices plist change takes
+    /// effect for the rest of the system. `kickstart -kp` is atomic (kill +
+    /// restart in one syscall) which avoids the gap where no `lsd` exists and
+    /// NSWorkspace queries return stale data.
+    static func kickstartLaunchServices() {
         let uid = getuid()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")

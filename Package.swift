@@ -12,6 +12,14 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]
+        ),
+        .testTarget(
+            name: "QuickSwitchTests",
+            dependencies: ["QuickSwitch"],
+            path: "Tests/QuickSwitchTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
+            ]
         )
     ]
 )
